@@ -1,124 +1,460 @@
 # Ein Routenplaner: deine Funktionen. server.rb ruft sie auf und zeigt im
 # Browser, was sie schon können.
 
-# Liest die Wege einer Datei aus data/. Jede Zeile ist ein Weg, die Teile sind
-# durch Tabulatoren getrennt: Art, Einbahnstraße, Name, Punkte. Die Punkte
-# sind »ID LÄNGE,BREITE ID LÄNGE,BREITE …«.
-#
-# Gibt ein Array von Hashes zurück, einen pro Weg:
-#   { kind: 'residential', oneway: '', name: 'Schloßstraße',
-#     points: [['26735834', 13.3266, 52.4567], …] }
 def read_ways(path)
-    raise NotImplementedError, 'read_ways'
+  result = []
+  File.read(path, chomp: true).split("\n").each do |line|
+    parts = line.split("\t", 4)
+    kind = parts[0]
+    oneway = parts[1]
+    name = parts[2]
+    points_str = parts[3]
+    points_arr = []
+    if points_str != nil && points_str != ''
+      tokens = points_str.split
+      i = 0
+      while i < tokens.length
+        id_part = tokens[i]
+        latlon = tokens[i + 1]
+        if latlon != nil
+          ll = latlon.split(',')
+          if ll.length == 2
+            points_arr << [id_part, ll[0].to_f, ll[1].to_f]
+          end
+        end
+        i += 2
+      end
+    end
+    result << { :kind => kind, :oneway => oneway, :name => name, :points => points_arr }
+  end
+  return result
 end
 
-# Der Abstand zweier Punkte in Metern
 def distance(lon1, lat1, lon2, lat2)
-    raise NotImplementedError, 'distance'
+  r = 6371000.0
+  phi1 = lat1 * Math::PI / 180.0
+  phi2 = lat2 * Math::PI / 180.0
+  dphi = (lat2 - lat1) * Math::PI / 180.0
+  dlambda = (lon2 - lon1) * Math::PI / 180.0
+  a = Math.sin(dphi / 2.0) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dlambda / 2.0) ** 2
+  c = 2.0 * Math.atan2(Math.sqrt(a), Math.sqrt(1.0 - a))
+  return r * c
 end
 
-# Der Graph aus den Wegen:
-#   nodes: { ID => [Länge, Breite] } für jeden Punkt
-#   edges: { ID => [[Nachbar-ID, Meter], …] } für jeden Punkt, in beide Richtungen
 def build_graph(ways)
-    raise NotImplementedError, 'build_graph'
+  graph = { :nodes => {}, :edges => {} }
+  ways.each do |way|
+    points = way[:points]
+    i = 0
+    while i < points.length
+      p = points[i]
+      graph[:nodes][p[0]] = [p[1], p[2]]
+      if graph[:edges][p[0]] == nil
+        graph[:edges][p[0]] = []
+      end
+      i += 1
+    end
+    i = 0
+    while i < points.length - 1
+      p1 = points[i]
+      p2 = points[i + 1]
+      meters = distance(p1[1], p1[2], p2[1], p2[2])
+      graph[:edges][p1[0]] << [p2[0], meters]
+      graph[:edges][p2[0]] << [p1[0], meters]
+      i += 1
+    end
+  end
+  return graph
 end
 
-# Der Weg zum Ziel, rückwärts aus den Vorgängern: previous sagt für jeden
-# gefundenen Knoten, von welchem aus er gefunden wurde (der Start von nil).
-# Gibt die IDs vom Start bis zum Ziel zurück, nil, wenn das Ziel nicht dabei ist.
 def path_to(previous, goal)
-    raise NotImplementedError, 'path_to'
+  if previous.key?(goal) == false
+    return nil
+  end
+  result = []
+  current = goal
+  seen = {}
+  while current != nil
+    if seen.key?(current)
+      return nil
+    end
+    seen[current] = true
+    result << current
+    current = previous[current]
+  end
+  result.reverse!
+  return result
 end
 
-# Breitensuche: der Weg über die wenigsten Kanten. Gibt zurück:
-#   { path: [Start-ID, …, Ziel-ID] (oder nil, wenn es keinen Weg gibt),
-#     visited: [ID, …] }  die besuchten Knoten, in der Reihenfolge der Suche
 def breadth_first(graph, start, goal)
-    raise NotImplementedError, 'breadth_first'
+  edges = graph[:edges]
+  visited = []
+  previous = {}
+  previous[start] = nil
+  queue = []
+  queue << start
+  head = 0
+  while head < queue.length
+    current = queue[head]
+    head = head + 1
+    visited << current
+    if current == goal
+      return { :path => path_to(previous, goal), :visited => visited }
+    end
+    neighbors = edges[current]
+    if neighbors == nil
+      neighbors = []
+    end
+    i = 0
+    while i < neighbors.length
+      nb = neighbors[i]
+      neighbor = nb[0]
+      if !previous.key?(neighbor)
+        previous[neighbor] = current
+        queue << neighbor
+      end
+      i = i + 1
+    end
+  end
+  return { :path => nil, :visited => visited }
 end
 
-# Dijkstra: der kürzeste Weg in Metern. Gibt dasselbe zurück wie breadth_first.
 def dijkstra(graph, start, goal)
-    raise NotImplementedError, 'dijkstra'
+  edges = graph[:edges]
+  visited = []
+  previous = {}
+  previous[start] = nil
+  dist = {}
+  dist[start] = 0.0
+  heap = MinHeap.new
+  heap.push(0.0, start)
+  while !heap.empty?
+    prio_val = heap.pop
+    if prio_val == nil
+      break
+    end
+    prio = prio_val[0]
+    current = prio_val[1]
+    if dist[current] != nil && prio > dist[current] + 1e-12
+      next
+    end
+    visited << current
+    if current == goal
+      return { :path => path_to(previous, goal), :visited => visited }
+    end
+    neighbors = edges[current]
+    if neighbors == nil
+      neighbors = []
+    end
+    i = 0
+    while i < neighbors.length
+      nb = neighbors[i]
+      neighbor = nb[0]
+      metres = nb[1]
+      nd = prio + metres
+      if dist[neighbor] == nil || nd < dist[neighbor] - 1e-12
+        dist[neighbor] = nd
+        previous[neighbor] = current
+        heap.push(nd, neighbor)
+      end
+      i += 1
+    end
+  end
+  return { :path => nil, :visited => visited }
 end
 
-# Eine Priority Queue: push legt einen Wert mit einer Priorität
-# hinein, pop gibt das Paar [Priorität, Wert] mit der kleinsten Priorität
-# zurück und nimmt es heraus (nil, wenn sie leer ist).
 class MinHeap
-    def initialize
-        @items = [] # [Priorität, Wert], als binärer Heap
-    end
+  def initialize
+    @items = []
+  end
 
-    def empty?
-        @items.empty?
-    end
+  def empty?
+    return @items.length == 0
+  end
 
-    def size
-        @items.size
-    end
+  def size
+    return @items.length
+  end
 
-    def push(priority, value)
-        raise NotImplementedError, 'MinHeap#push'
+  def push(priority, value)
+    @items << [priority, value]
+    i = @items.length - 1
+    while i > 0
+      pidx = (i - 1) / 2
+      if @items[pidx][0] <= @items[i][0]
+        break
+      end
+      tmp = @items[pidx]
+      @items[pidx] = @items[i]
+      @items[i] = tmp
+      i = pidx
     end
+  end
 
-    def pop
-        raise NotImplementedError, 'MinHeap#pop'
+  def pop
+    if @items.length == 0
+      return nil
     end
+    root = @items[0]
+    last = @items.pop
+    if @items.length > 0
+      @items[0] = last
+      i = 0
+      n = @items.length
+      while true
+        smallest = i
+        left = 2 * i + 1
+        right = 2 * i + 2
+        if left < n && @items[left][0] < @items[smallest][0]
+          smallest = left
+        end
+        if right < n && @items[right][0] < @items[smallest][0]
+          smallest = right
+        end
+        if smallest == i
+          break
+        end
+        tmp = @items[i]
+        @items[i] = @items[smallest]
+        @items[smallest] = tmp
+        i = smallest
+      end
+    end
+    return root
+  end
 end
 
-# A*: wie Dijkstra, mit der Luftlinie zum Ziel als Schätzung für den Rest.
-# Gibt dasselbe zurück wie breadth_first.
 def a_star(graph, start, goal)
-    raise NotImplementedError, 'a_star'
+  edges = graph[:edges]
+  nodes = graph[:nodes]
+  visited = []
+  previous = {}
+  previous[start] = nil
+  dist = {}
+  dist[start] = 0.0
+  goal_pos = nodes[goal]
+  heap = MinHeap.new
+  start_pos = nodes[start]
+  h_start = 0.0
+  if goal_pos != nil && start_pos != nil
+    h_start = distance(start_pos[0], start_pos[1], goal_pos[0], goal_pos[1])
+  end
+  heap.push(h_start, start)
+  while !heap.empty?
+    prio_f = heap.pop
+    if prio_f == nil
+      break
+    end
+    fcur = prio_f[0]
+    current = prio_f[1]
+    g_cur = dist[current]
+    if g_cur == nil
+      next
+    end
+    cpos = nodes[current]
+    h_cur = 0.0
+    if goal_pos != nil && cpos != nil
+      h_cur = distance(cpos[0], cpos[1], goal_pos[0], goal_pos[1])
+    end
+    if fcur > g_cur + h_cur + 1e-12
+      next
+    end
+    visited << current
+    if current == goal
+      return { :path => path_to(previous, goal), :visited => visited }
+    end
+    neighbors = edges[current]
+    if neighbors == nil
+      neighbors = []
+    end
+    i = 0
+    while i < neighbors.length
+      nb = neighbors[i]
+      neighbor = nb[0]
+      metres = nb[1]
+      ng = g_cur + metres
+      if dist[neighbor] == nil || ng < dist[neighbor] - 1e-12
+        dist[neighbor] = ng
+        previous[neighbor] = current
+        npos = nodes[neighbor]
+        hn = 0.0
+        if goal_pos != nil && npos != nil
+          hn = distance(npos[0], npos[1], goal_pos[0], goal_pos[1])
+        end
+        heap.push(ng + hn, neighbor)
+      end
+      i += 1
+    end
+  end
+  return { :path => nil, :visited => visited }
 end
 
-# Wie schnell man auf welcher Art von Weg vorankommt, in km/h. Was in der
-# Liste einer Art zu reisen fehlt, darf man so nicht benutzen.
 SPEEDS = {
-    'foot' => { 'footway' => 5, 'path' => 5, 'pedestrian' => 5, 'steps' => 2, 'living_street' => 5,
-                'residential' => 5, 'service' => 5, 'unclassified' => 5, 'tertiary' => 5, 'secondary' => 5,
-                'primary' => 5, 'track' => 5, 'cycleway' => 5, 'bridleway' => 5, 'ferry' => 5 },
-    'bike' => { 'cycleway' => 18, 'residential' => 15, 'living_street' => 10, 'service' => 12,
-                'unclassified' => 15, 'tertiary' => 16, 'secondary' => 16, 'primary' => 16,
-                'tertiary_link' => 15, 'secondary_link' => 15, 'primary_link' => 15,
-                'path' => 12, 'track' => 10, 'bridleway' => 10, 'ferry' => 10 },
-    'car' => { 'motorway' => 90, 'motorway_link' => 50, 'trunk' => 60, 'trunk_link' => 40,
-               'primary' => 50, 'primary_link' => 30, 'secondary' => 45, 'secondary_link' => 30,
-               'tertiary' => 40, 'tertiary_link' => 30, 'unclassified' => 30, 'residential' => 25,
-               'living_street' => 7, 'service' => 10, 'ferry' => 10 }
-}.freeze
+  'foot' => { 'footway' => 5, 'path' => 5, 'pedestrian' => 5, 'steps' => 2, 'living_street' => 5,
+              'residential' => 5, 'service' => 5, 'unclassified' => 5, 'tertiary' => 5, 'secondary' => 5,
+              'primary' => 5, 'track' => 5, 'cycleway' => 5, 'bridleway' => 5, 'ferry' => 5 },
+  'bike' => { 'cycleway' => 18, 'residential' => 15, 'living_street' => 10, 'service' => 12,
+              'unclassified' => 15, 'tertiary' => 16, 'secondary' => 16, 'primary' => 16,
+              'tertiary_link' => 15, 'secondary_link' => 15, 'primary_link' => 15,
+              'path' => 12, 'track' => 10, 'bridleway' => 10, 'ferry' => 10 },
+  'car' => { 'motorway' => 90, 'motorway_link' => 50, 'trunk' => 60, 'trunk_link' => 40,
+             'primary' => 50, 'primary_link' => 30, 'secondary' => 45, 'secondary_link' => 30,
+             'tertiary' => 40, 'tertiary_link' => 30, 'unclassified' => 30, 'residential' => 25,
+             'living_street' => 7, 'service' => 10, 'ferry' => 10 }
+}
 
-# Der Graph für eine Art zu reisen ('foot', 'bike', 'car'): wie build_graph,
-# aber nur mit den Wegen, die man so benutzen darf, und mit Sekunden statt
-# Metern an den Kanten. Für das Auto gelten die Einbahnstraßen.
-#   { nodes: …, edges: …, fastest: das größte Tempo in Metern je Sekunde }
 def build_travel_graph(ways, mode)
+  speeds = SPEEDS[mode]
+  if speeds == nil
     raise NotImplementedError, 'build_travel_graph'
+  end
+  graph = { :nodes => {}, :edges => {}, :fastest => 0.0 }
+  ways.each do |way|
+    kind = way[:kind]
+    if speeds.key?(kind) == false
+      next
+    end
+    speed_kmh = speeds[kind]
+    speed_ms = speed_kmh / 3.6
+    if speed_ms > graph[:fastest]
+      graph[:fastest] = speed_ms
+    end
+    oneway = way[:oneway]
+    points = way[:points]
+    i = 0
+    while i < points.length
+      p = points[i]
+      graph[:nodes][p[0]] = [p[1], p[2]]
+      if graph[:edges][p[0]] == nil
+        graph[:edges][p[0]] = []
+      end
+      i += 1
+    end
+    i = 0
+    while i < points.length - 1
+      p1 = points[i]
+      p2 = points[i + 1]
+      meters = distance(p1[1], p1[2], p2[1], p2[2])
+      seconds = meters / speed_ms
+      if mode == 'car' && oneway == 'yes'
+        graph[:edges][p1[0]] << [p2[0], seconds]
+      else
+        graph[:edges][p1[0]] << [p2[0], seconds]
+        graph[:edges][p2[0]] << [p1[0], seconds]
+      end
+      i += 1
+    end
+  end
+  return graph
 end
 
-# Eine Rundfahrt durch mehrere Orte: costs[i][j] sagt, wie weit es von Ort i
-# zu Ort j ist. Eine Reihenfolge ist ein Array von Nummern der Orte; sie
-# beginnt bei 0 und kehrt am Ende zu ihrem Anfang zurück.
-
-# Wie lang eine Rundfahrt in dieser Reihenfolge ist, mit dem Weg zurück
 def tour_length(costs, order)
-    raise NotImplementedError, 'tour_length'
+  total = 0.0
+  n = order.length
+  i = 0
+  while i < n
+    a = order[i]
+    b = order[(i + 1) % n]
+    total += costs[a][b]
+    i += 1
+  end
+  return total
 end
 
-# Die beste Reihenfolge, durch Ausprobieren aller
 def best_tour(costs)
-    raise NotImplementedError, 'best_tour'
+  n = costs.length
+  if n <= 1
+    res = []
+    i = 0
+    while i < n
+      res << i
+      i += 1
+    end
+    return res
+  end
+  best_order = nil
+  best_len = 1e18
+  arr = []
+  i = 0
+  while i < n
+    arr << i
+    i += 1
+  end
+  arr.permutation do |perm|
+    l = tour_length(costs, perm)
+    if l < best_len
+      best_len = l
+      best_order = perm.dup
+    end
+  end
+  if best_order == nil
+    return arr
+  end
+  return best_order
 end
 
-# Immer zum nächsten Ort, an dem die Rundfahrt noch nicht war
 def nearest_tour(costs)
-    raise NotImplementedError, 'nearest_tour'
+  n = costs.length
+  if n == 0
+    return []
+  end
+  visited = Array.new(n, false)
+  order = []
+  order << 0
+  visited[0] = true
+  current = 0
+  while order.length < n
+    best_j = -1
+    best_c = 1e18
+    j = 0
+    while j < n
+      if visited[j] == false
+        c = costs[current][j]
+        if c < best_c
+          best_c = c
+          best_j = j
+        end
+      end
+      j += 1
+    end
+    if best_j == -1
+      break
+    end
+    order << best_j
+    visited[best_j] = true
+    current = best_j
+  end
+  return order
 end
 
-# Eine Reihenfolge mit 2-opt verbessern: ein Stück umdrehen, solange die
-# Rundfahrt dadurch kürzer wird
 def improve_tour(costs, order)
-    raise NotImplementedError, 'improve_tour'
+  order_arr = order.dup
+  n = order_arr.length
+  improved = true
+  while improved
+    improved = false
+    i = 0
+    while i < n
+      j = i + 2
+      while j < n + i - 1
+        j_mod = j % n
+        if j_mod != i
+          new_order = order_arr.dup
+          seg = new_order[(i + 1)...j_mod]
+          new_order[(i + 1)...j_mod] = seg.reverse
+          if tour_length(costs, new_order) < tour_length(costs, order_arr) - 1e-12
+            order_arr = new_order
+            improved = true
+            break
+          end
+        end
+        j += 1
+      end
+      if improved
+        break
+      end
+      i += 1
+    end
+  end
+  return order_arr
 end

@@ -1,5 +1,6 @@
 # Ein Routenplaner: deine Funktionen. server.py ruft sie auf und zeigt im
 # Browser, was sie schon können.
+import itertools
 import math
 
 
@@ -11,33 +12,75 @@ import math
 #   {'kind': 'residential', 'oneway': '', 'name': 'Schloßstraße',
 #    'points': [['26735834', 13.3266, 52.4567], …]}
 def read_ways(path):
-    raise NotImplementedError('read_ways')
+    ways = []
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            kind, oneway, name, points = line.rstrip('\n').split('\t')
+            tokens = points.split()
+            ways.append({
+                'kind': kind,
+                'oneway': oneway,
+                'name': name,
+                'points': [[tokens[i], *map(float, tokens[i + 1].split(','))] for i in range(0, len(tokens), 2)],
+            })
+    return ways
+    
 
 
 # Der Abstand zweier Punkte in Metern
 def distance(lon1, lat1, lon2, lat2):
-    raise NotImplementedError('distance')
+    return 6371000 * math.acos(math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+                               math.cos(math.radians(lon2) - math.radians(lon1)) +
+                               math.sin(math.radians(lat1)) * math.sin(math.radians(lat2)))
 
 
 # Der Graph aus den Wegen:
 #   'nodes': {ID: [Länge, Breite]} für jeden Punkt
 #   'edges': {ID: [[Nachbar-ID, Meter], …]} für jeden Punkt, in beide Richtungen
 def build_graph(ways):
-    raise NotImplementedError('build_graph')
+    graph = {'nodes': {}, 'edges': {}}
+    for way in ways:
+        points = way['points']
+        for node_id, lon, lat in points:
+            graph['nodes'][node_id] = [lon, lat]
+            graph['edges'].setdefault(node_id, [])
+        for (id1, lon1, lat1), (id2, lon2, lat2) in itertools.pairwise(points):
+            meters = distance(lon1, lat1, lon2, lat2)
+            graph['edges'][id1].append([id2, meters])
+            graph['edges'][id2].append([id1, meters])
+    return graph
 
 
 # Der Weg zum Ziel, rückwärts aus den Vorgängern: previous sagt für jeden
 # gefundenen Knoten, von welchem aus er gefunden wurde (der Start von None).
 # Gibt die IDs vom Start bis zum Ziel zurück, None, wenn das Ziel nicht dabei ist.
 def path_to(previous, goal):
-    raise NotImplementedError('path_to')
+    result = []
+    while goal is not None:
+        result.append(goal)
+        goal = previous[goal]
+    result.reverse()
+    return result
 
 
 # Breitensuche: der Weg über die wenigsten Kanten. Gibt zurück:
 #   {'path': [Start-ID, …, Ziel-ID] (oder None, wenn es keinen Weg gibt),
 #    'visited': [ID, …]}  die besuchten Knoten, in der Reihenfolge der Suche
 def breadth_first(graph, start, goal):
-    raise NotImplementedError('breadth_first')
+    graph = graph['edges']
+    visited = []
+    previous = {start: None}
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        visited.append(current)
+        if current == goal:
+            return {'path': path_to(previous, goal), 'visited': visited}
+        for neighbor, _ in graph.get(current, []):
+            if neighbor not in previous:
+                previous[neighbor] = current
+                queue.append(neighbor)
+    return {'path': None, 'visited': visited}    
 
 
 # Dijkstra: der kürzeste Weg in Metern. Gibt dasselbe zurück wie breadth_first.
